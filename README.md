@@ -15,8 +15,9 @@ Faster-Whisper speech recognition engine to convert your speech into text.
 ## Installation
 
 1. Install Python 3.11 (64-bit) if it is not already installed.
-2. Run `Install_Nexus_Speech.bat`.
-3. Wait for the installation to finish. The first model download is
+2. https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe and tick Add Python to PATH
+3. Run `Install_Nexus_Speech.bat`.
+4. Wait for the installation to finish. The first model download is
    approximately 1–2 GB.
 
 ## Starting Nexus
