@@ -200,15 +200,64 @@ title_label = tk.Label(
 title_label.pack(side="left")
 
 
+def apply_native_topmost(window, enabled):
+    """Keep a Tk window's native Windows Z-order flag in sync with On top."""
+    try:
+        if not window.winfo_exists():
+            return
+
+        window.update_idletasks()
+
+        # winfo_id() can be the Tk client window; GetParent returns the
+        # actual top-level Windows window that owns the Z-order.
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetParent(window.winfo_id())
+        if not hwnd:
+            hwnd = window.winfo_id()
+
+        from ctypes import wintypes
+
+        user32.SetWindowPos.argtypes = (
+            wintypes.HWND, wintypes.HWND,
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.c_uint
+        )
+        user32.SetWindowPos.restype = wintypes.BOOL
+
+        HWND_TOPMOST = wintypes.HWND(-1)
+        HWND_NOTOPMOST = wintypes.HWND(-2)
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_NOACTIVATE = 0x0010
+
+        insert_after = HWND_TOPMOST if enabled else HWND_NOTOPMOST
+        user32.SetWindowPos(
+            wintypes.HWND(hwnd),
+            insert_after,
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+        )
+
+    except (AttributeError, OSError, tk.TclError, TypeError):
+        # Tk's own topmost attribute remains as a fallback.
+        pass
+
+
 def set_topmost():
     enabled = bool(top_var.get())
     root.attributes("-topmost", enabled)
+    apply_native_topmost(root, enabled)
+
+    if wolf is not None:
+        try:
+            if wolf.winfo_exists():
+                wolf.attributes("-topmost", enabled)
+                apply_native_topmost(wolf, enabled)
+        except tk.TclError:
+            pass
 
     if enabled:
         root.lift()
-    else:
-        root.attributes("-topmost", False)
-        root.lower()
 
     save_data()
 
@@ -230,13 +279,18 @@ pin_button.pack(side="right", padx=(4, 0))
 
 
 def maintain_topmost():
-    """Reassert the note's topmost state without stealing keyboard focus."""
+    """Keep the native Windows Z-order flag aligned with the checkbox."""
     try:
         if not root.winfo_exists():
             return
 
-        if top_var.get():
-            root.attributes("-topmost", True)
+        enabled = bool(top_var.get())
+        root.attributes("-topmost", enabled)
+        apply_native_topmost(root, enabled)
+
+        if wolf is not None and wolf.winfo_exists():
+            wolf.attributes("-topmost", enabled)
+            apply_native_topmost(wolf, enabled)
 
         root.after(2000, maintain_topmost)
     except tk.TclError:
@@ -554,7 +608,8 @@ def collapse_note():
     wolf = tk.Toplevel(root)
     wolf.overrideredirect(True)
     wolf.geometry(f"{ICON_SIZE}x{ICON_SIZE}{x:+d}{y:+d}")
-    wolf.attributes("-topmost", True)
+    wolf.attributes("-topmost", bool(top_var.get()))
+    apply_native_topmost(wolf, bool(top_var.get()))
 
     try:
         wolf.configure(bg=TRANSPARENT_KEY)
@@ -648,7 +703,7 @@ def restore_note():
     root.withdraw()
     root.after(10, root.deiconify)
     root.after(30, root.lift)
-    root.after(50, lambda: root.attributes("-topmost", bool(top_var.get())))
+    root.after(50, set_topmost)
     root.after(100, editor.focus_set)
     root.after(150, save_data)
 
