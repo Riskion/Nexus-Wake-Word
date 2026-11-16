@@ -229,6 +229,20 @@ pin_button = tk.Checkbutton(
 pin_button.pack(side="right", padx=(4, 0))
 
 
+def maintain_topmost():
+    """Reassert the note's topmost state without stealing keyboard focus."""
+    try:
+        if not root.winfo_exists():
+            return
+
+        if top_var.get():
+            root.attributes("-topmost", True)
+
+        root.after(2000, maintain_topmost)
+    except tk.TclError:
+        pass
+
+
 # ============================================================
 # LOCAL SPEECH-TO-TEXT (NO WINDOWS VOICE TYPING)
 # ============================================================
@@ -785,6 +799,7 @@ root.protocol("WM_DELETE_WINDOW", close_app)
 _last_editor_text = editor.get("1.0", "end-1c")
 root.after(150, poll_editor_text)
 root.after(100, poll_speech_messages)
+root.after(2000, maintain_topmost)
 
 root.withdraw()
 root.after(500, start_compact_silently)
