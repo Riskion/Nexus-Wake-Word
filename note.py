@@ -2,6 +2,8 @@ import ctypes
 import json
 import queue
 import tkinter as tk
+from tkinter import messagebox, simpledialog
+import uuid
 from speech_engine import SpeechEngine
 from pathlib import Path
 
@@ -22,7 +24,7 @@ WOLF_FILE = APP_DIR / "wolf.png"
 OPEN_SOUND = APP_DIR / "Cara-Delevingne-Voice-open.mp3"
 CLOSE_SOUND = APP_DIR / "Cara-Delevingne-Voice-closed.mp3"
 
-NOTE_W, NOTE_H = 320, 460
+NOTE_W, NOTE_H = 440, 460
 ICON_SIZE = 96
 
 BG = "#202124"
@@ -60,6 +62,37 @@ def load_data():
 data = load_data()
 sound_muted = bool(data.get("sound_muted", False))
 
+# Conversations are stored independently in note_data.json.
+# Older versions stored only one text field; migrate it into the first tab.
+conversations = data.get("conversations", [])
+if not isinstance(conversations, list):
+    conversations = []
+
+clean_conversations = []
+for item in conversations:
+    if isinstance(item, dict):
+        clean_conversations.append({
+            "id": str(item.get("id") or uuid.uuid4().hex),
+            "title": str(item.get("title") or "New conversation"),
+            "custom_title": bool(item.get("custom_title", False)),
+            "text": str(item.get("text", "")),
+        })
+conversations = clean_conversations
+
+if not conversations:
+    conversations = [{
+        "id": uuid.uuid4().hex,
+        "title": "New conversation",
+        "custom_title": False,
+        "text": str(data.get("text", "")),
+    }]
+
+active_conversation_id = str(data.get("active_conversation_id", ""))
+if not any(item["id"] == active_conversation_id for item in conversations):
+    active_conversation_id = conversations[0]["id"]
+
+_last_tab_title = None
+
 
 # ============================================================
 # MAIN WINDOW
@@ -67,9 +100,9 @@ sound_muted = bool(data.get("sound_muted", False))
 
 root = tk.Tk()
 root.withdraw()
-root.title("Desktop Sticky Note")
+root.title("Nexus Wake Word")
 root.configure(bg=BG)
-root.minsize(260, 330)
+root.minsize(430, 330)
 root.geometry(data.get("geometry", f"{NOTE_W}x{NOTE_H}+80+80"))
 
 top_var = tk.BooleanVar(value=bool(data.get("always_on_top", True)))
@@ -103,6 +136,51 @@ def show_note_without_taskbar():
 
 
 root.after(100, show_note_without_taskbar)
+
+
+def apply_dark_title_bar():
+    """Request a black Windows title bar with white caption text (Windows 11)."""
+    try:
+        if not hasattr(ctypes, "windll") or not root.winfo_exists():
+            return
+
+        root.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+        if not hwnd:
+            hwnd = root.winfo_id()
+
+        dwmapi = ctypes.windll.dwmapi
+        dwmapi.DwmSetWindowAttribute.argtypes = (
+            ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint
+        )
+        dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
+
+        # Windows 11 DWM attributes: dark mode, caption colour and text colour.
+        dark_mode = ctypes.c_int(1)
+        black = ctypes.c_uint(0x00000000)
+        white = ctypes.c_uint(0x00FFFFFF)
+
+        for attribute in (20, 19):  # Attribute 20 on current Windows 11; 19 on older builds.
+            result = dwmapi.DwmSetWindowAttribute(
+                ctypes.c_void_p(hwnd), attribute,
+                ctypes.byref(dark_mode), ctypes.sizeof(dark_mode)
+            )
+            if result == 0:
+                break
+
+        dwmapi.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd), 35, ctypes.byref(black), ctypes.sizeof(black)
+        )
+        dwmapi.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd), 36, ctypes.byref(white), ctypes.sizeof(white)
+        )
+        dwmapi.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd), 34, ctypes.byref(black), ctypes.sizeof(black)
+        )
+    except (AttributeError, OSError, tk.TclError, TypeError):
+        # Unsupported Windows versions simply keep their normal title-bar theme.
+        pass
+
 
 
 # ============================================================
@@ -141,8 +219,17 @@ def save_data():
             data["always_on_top"] = bool(top_var.get())
 
         if editor.winfo_exists():
-            data["text"] = editor.get("1.0", "end-1c")
+            current_text = editor.get("1.0", "end-1c")
+            data["text"] = current_text  # Keep compatibility with older app versions.
+            active_conversation = next(
+                (item for item in conversations if item["id"] == active_conversation_id),
+                None,
+            )
+            if active_conversation is not None:
+                active_conversation["text"] = current_text
 
+        data["conversations"] = conversations
+        data["active_conversation_id"] = active_conversation_id
         data["sound_muted"] = sound_muted
 
         if wolf is not None:
@@ -275,7 +362,7 @@ pin_button = tk.Checkbutton(
     font=("Segoe UI", 9),
     bd=0,
 )
-pin_button.pack(side="right", padx=(4, 0))
+pin_button.pack(side="left", padx=(4, 0))
 
 
 def maintain_topmost():
@@ -407,7 +494,7 @@ speak_button = tk.Button(
     padx=5,
     pady=1,
 )
-speak_button.pack(side="right", padx=(2, 0))
+speak_button.pack(side="left", padx=(2, 0))
 
 
 # ============================================================
@@ -452,7 +539,7 @@ sound_button = tk.Button(
     padx=8,
     pady=2,
 )
-sound_button.pack(side="right", padx=(2, 0))
+sound_button.pack(side="left", padx=(2, 0))
 update_sound_button()
 
 
@@ -463,6 +550,7 @@ update_sound_button()
 body = tk.Frame(root, bg=BG, padx=10, pady=10)
 body.pack(fill="both", expand=True)
 
+# Main writing area on the left; conversation tabs stay on the right.
 editor = tk.Text(
     body,
     wrap="word",
@@ -482,9 +570,307 @@ editor = tk.Text(
     highlightbackground=BORDER,
     highlightcolor=ACCENT,
 )
-editor.pack(fill="both", expand=True)
-editor.insert("1.0", str(data.get("text", "")))
+# Narrow vertical sidebar for independent conversations. Pack it before
+# the expanding editor so it always keeps its space on the right.
+tabs_panel = tk.Frame(body, bg=PANEL, width=126, padx=5, pady=5)
+tabs_panel.pack(side="right", fill="y", padx=(8, 0))
+tabs_panel.pack_propagate(False)
+
+tabs_heading = tk.Label(
+    tabs_panel,
+    text="CONVERSATIONS",
+    bg=PANEL,
+    fg=MUTED,
+    font=("Segoe UI", 7, "bold"),
+    anchor="w",
+)
+tabs_heading.pack(fill="x", pady=(2, 7))
+
+tabs_canvas = tk.Canvas(tabs_panel, bg=PANEL, highlightthickness=0, bd=0)
+# A tiny custom scrollbar is used instead of Tk's native Windows scrollbar,
+# whose system theme ignores the requested black colour and width.
+tabs_scrollbar = tk.Canvas(
+    tabs_panel, width=2, bg=PANEL, highlightthickness=0, bd=0
+)
+# Pack the New button first so the expanding canvas cannot consume its space.
+# This keeps + New visible at the bottom of the sidebar.
+tabs_list = tk.Frame(tabs_canvas, bg=PANEL)
+tabs_window = tabs_canvas.create_window((0, 0), window=tabs_list, anchor="nw")
+
+_scrollbar_drag = {"active": False}
+
+def update_tabs_scrollbar(first, last):
+    """Draw a 2-pixel black scroll indicator for the conversation list."""
+    try:
+        tabs_scrollbar.delete("thumb")
+        height = tabs_scrollbar.winfo_height()
+        if height <= 1:
+            return
+        first = float(first)
+        last = float(last)
+        if first <= 0.0 and last >= 1.0:
+            return
+        thumb_top = int(first * height)
+        thumb_bottom = max(thumb_top + 14, int(last * height))
+        thumb_bottom = min(height, thumb_bottom)
+        tabs_scrollbar.create_rectangle(
+            0, thumb_top, 2, thumb_bottom,
+            fill="#000000", outline="#000000", tags="thumb"
+        )
+    except (tk.TclError, ValueError):
+        pass
+
+def scroll_tabs_to_pointer(event):
+    height = max(1, tabs_scrollbar.winfo_height())
+    tabs_canvas.yview_moveto(max(0.0, min(1.0, event.y / height)))
+
+def drag_tabs_scrollbar(event):
+    if _scrollbar_drag.get("active"):
+        scroll_tabs_to_pointer(event)
+
+tabs_scrollbar.bind("<Button-1>", lambda event: (_scrollbar_drag.__setitem__("active", True), scroll_tabs_to_pointer(event)))
+tabs_scrollbar.bind("<B1-Motion>", drag_tabs_scrollbar)
+tabs_scrollbar.bind("<ButtonRelease-1>", lambda event: _scrollbar_drag.__setitem__("active", False))
+tabs_canvas.configure(yscrollcommand=update_tabs_scrollbar)
+tabs_list.bind(
+    "<Configure>",
+    lambda event: tabs_canvas.configure(scrollregion=tabs_canvas.bbox("all")),
+)
+tabs_canvas.bind(
+    "<Configure>",
+    lambda event: tabs_canvas.itemconfigure(tabs_window, width=event.width),
+)
+tabs_scrollbar.bind("<Configure>", lambda event: tabs_canvas.yview())
+
+new_tab_button = tk.Button(
+    tabs_panel,
+    text="+ New",
+    command=lambda: create_conversation(),
+    bg="#34465c",
+    fg="white",
+    activebackground="#466080",
+    activeforeground="white",
+    relief="flat",
+    bd=0,
+    cursor="hand2",
+    font=("Segoe UI", 9, "bold"),
+    padx=5,
+    pady=5,
+)
+new_tab_button.pack(fill="x", pady=(6, 0))
+
+# Pack the scrolling list after the fixed New button, reserving its space.
+tabs_canvas.pack(side="left", fill="both", expand=True)
+tabs_scrollbar.pack(side="right", fill="y", padx=(3, 0))
+
+editor.pack(side="left", fill="both", expand=True)
+
+# Restore the last active conversation. The legacy text field is used only
+# as a fallback for data created by an older version of the app.
+active_start = next(
+    (item for item in conversations if item["id"] == active_conversation_id),
+    conversations[0],
+)
+editor.insert("1.0", active_start.get("text", str(data.get("text", ""))))
 editor.edit_modified(False)
+
+
+def active_conversation():
+    return next(
+        (item for item in conversations if item["id"] == active_conversation_id),
+        conversations[0] if conversations else None,
+    )
+
+
+def conversation_display_title(item):
+    if item.get("custom_title") and item.get("title", "").strip():
+        return item["title"].strip()
+
+    first_line = next(
+        (line.strip() for line in item.get("text", "").splitlines() if line.strip()),
+        "",
+    )
+    if not first_line:
+        return "New conversation"
+    return first_line if len(first_line) <= 17 else first_line[:16].rstrip() + "…"
+
+
+def sync_active_conversation():
+    item = active_conversation()
+    if item is not None:
+        item["text"] = editor.get("1.0", "end-1c")
+
+
+def refresh_conversation_tabs():
+    global _last_tab_title
+
+    for child in tabs_list.winfo_children():
+        child.destroy()
+
+    active_item = active_conversation()
+    _last_tab_title = conversation_display_title(active_item) if active_item else None
+
+    for item in conversations:
+        selected = item["id"] == active_conversation_id
+        tab_row = tk.Frame(tabs_list, bg="#3c4043" if selected else PANEL)
+        tab_row.pack(fill="x", pady=2)
+
+        tab_button = tk.Button(
+            tab_row,
+            text=conversation_display_title(item),
+            command=lambda conversation_id=item["id"]: switch_conversation(conversation_id),
+            bg="#3c4043" if selected else PANEL,
+            fg="#ffffff" if selected else TEXT,
+            activebackground="#4a4d50",
+            activeforeground="white",
+            relief="flat",
+            bd=0,
+            anchor="w",
+            justify="left",
+            cursor="hand2",
+            font=("Segoe UI", 8, "bold" if selected else "normal"),
+            padx=5,
+            pady=6,
+        )
+        tab_button.pack(side="left", fill="x", expand=True)
+        tab_button.bind(
+            "<Double-Button-1>",
+            lambda event, conversation_id=item["id"]: rename_conversation(conversation_id),
+        )
+
+        close_button = tk.Button(
+            tab_row,
+            text="×",
+            command=lambda conversation_id=item["id"]: remove_conversation(conversation_id),
+            bg="#3c4043" if selected else PANEL,
+            fg="#ff5c5c",
+            activebackground="#5a3030",
+            activeforeground="#ff7777",
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            font=("Segoe UI", 11, "bold"),
+            padx=5,
+            pady=1,
+        )
+        close_button.pack(side="right")
+
+
+def switch_conversation(conversation_id):
+    global active_conversation_id, _last_editor_text
+
+    if conversation_id == active_conversation_id:
+        return
+
+    sync_active_conversation()
+    target = next((item for item in conversations if item["id"] == conversation_id), None)
+    if target is None:
+        return
+
+    active_conversation_id = conversation_id
+    editor.delete("1.0", "end")
+    editor.insert("1.0", target.get("text", ""))
+    editor.edit_modified(False)
+    _last_editor_text = editor.get("1.0", "end-1c")
+    refresh_conversation_tabs()
+    save_data()
+    editor.focus_set()
+
+
+def create_conversation():
+    global active_conversation_id, _last_editor_text
+
+    sync_active_conversation()
+    item = {
+        "id": uuid.uuid4().hex,
+        "title": "New conversation",
+        "custom_title": False,
+        "text": "",
+    }
+    conversations.append(item)
+    active_conversation_id = item["id"]
+    editor.delete("1.0", "end")
+    editor.edit_modified(False)
+    _last_editor_text = ""
+    refresh_conversation_tabs()
+    save_data()
+    editor.focus_set()
+
+
+def rename_conversation(conversation_id):
+    item = next((entry for entry in conversations if entry["id"] == conversation_id), None)
+    if item is None:
+        return
+
+    current_name = conversation_display_title(item)
+    new_name = simpledialog.askstring(
+        "Rename conversation",
+        "Enter a name for this conversation:",
+        initialvalue=current_name,
+        parent=root,
+    )
+    if new_name is None:
+        return
+
+    new_name = new_name.strip()
+    if not new_name:
+        messagebox.showinfo("Rename conversation", "The conversation name cannot be empty.", parent=root)
+        return
+
+    item["title"] = new_name
+    item["custom_title"] = True
+    refresh_conversation_tabs()
+    save_data()
+
+
+def remove_conversation(conversation_id):
+    global active_conversation_id, _last_editor_text
+
+    if conversation_id == active_conversation_id:
+        sync_active_conversation()
+
+    item = next((entry for entry in conversations if entry["id"] == conversation_id), None)
+    if item is None:
+        return
+
+    if item.get("text", "").strip():
+        confirmed = messagebox.askyesno(
+            "Remove conversation",
+            f'Remove "{conversation_display_title(item)}" and all its saved text?',
+            parent=root,
+        )
+        if not confirmed:
+            return
+
+    removed_index = conversations.index(item)
+    was_active = conversation_id == active_conversation_id
+    conversations.remove(item)
+
+    if not conversations:
+        replacement = {
+            "id": uuid.uuid4().hex,
+            "title": "New conversation",
+            "custom_title": False,
+            "text": "",
+        }
+        conversations.append(replacement)
+
+    if was_active:
+        next_index = min(removed_index, len(conversations) - 1)
+        target = conversations[next_index]
+        active_conversation_id = target["id"]
+        editor.delete("1.0", "end")
+        editor.insert("1.0", target.get("text", ""))
+        editor.edit_modified(False)
+        _last_editor_text = editor.get("1.0", "end-1c")
+
+    refresh_conversation_tabs()
+    save_data()
+    if was_active:
+        editor.focus_set()
+
+
+refresh_conversation_tabs()
 
 
 # ============================================================
@@ -704,6 +1090,7 @@ def restore_note():
     root.after(10, root.deiconify)
     root.after(30, root.lift)
     root.after(50, set_topmost)
+    root.after(100, apply_dark_title_bar)
     root.after(100, editor.focus_set)
     root.after(150, save_data)
 
@@ -729,7 +1116,17 @@ fold_button = tk.Button(
     cursor="hand2",
     padx=5,
 )
-fold_button.pack(side="right")
+fold_button.pack(side="left")
+
+# Set the header controls in the exact requested left-to-right order.
+# Repacking them here avoids their earlier creation order affecting layout.
+for header_control in (fold_button, sound_button, speak_button, pin_button):
+    header_control.pack_forget()
+
+fold_button.pack(side="left", padx=(0, 2))
+sound_button.pack(side="left", padx=(2, 0))
+speak_button.pack(side="left", padx=(2, 0))
+pin_button.pack(side="left", padx=(4, 0))
 
 
 # ============================================================
@@ -793,6 +1190,12 @@ def poll_editor_text():
             _last_editor_text = current_text
         elif current_text != _last_editor_text:
             _last_editor_text = current_text
+            item = active_conversation()
+            if item is not None:
+                item["text"] = current_text
+                current_title = conversation_display_title(item)
+                if current_title != _last_tab_title and not item.get("custom_title"):
+                    refresh_conversation_tabs()
             schedule_save()
             root.after_idle(redraw_editor)
 
