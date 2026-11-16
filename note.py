@@ -587,50 +587,105 @@ tabs_heading = tk.Label(
 tabs_heading.pack(fill="x", pady=(2, 7))
 
 tabs_canvas = tk.Canvas(tabs_panel, bg=PANEL, highlightthickness=0, bd=0)
-# A tiny custom scrollbar is used instead of Tk's native Windows scrollbar,
-# whose system theme ignores the requested black colour and width.
+# Keep a wide invisible hit area so the scrollbar is easy to grab, while
+# drawing only a 2-pixel black line in its centre.
 tabs_scrollbar = tk.Canvas(
-    tabs_panel, width=2, bg=PANEL, highlightthickness=0, bd=0
+    tabs_panel, width=10, bg=PANEL, highlightthickness=0, bd=0,
+    cursor="arrow"
 )
 # Pack the New button first so the expanding canvas cannot consume its space.
 # This keeps + New visible at the bottom of the sidebar.
 tabs_list = tk.Frame(tabs_canvas, bg=PANEL)
 tabs_window = tabs_canvas.create_window((0, 0), window=tabs_list, anchor="nw")
 
-_scrollbar_drag = {"active": False}
+_scrollbar_drag = {"active": False, "grab_offset": 0}
+_scrollbar_thumb = {"top": 0, "bottom": 0}
 
 def update_tabs_scrollbar(first, last):
-    """Draw a 2-pixel black scroll indicator for the conversation list."""
+    """Draw a slim black thumb inside a wider, usable scrollbar hit area."""
     try:
         tabs_scrollbar.delete("thumb")
         height = tabs_scrollbar.winfo_height()
-        if height <= 1:
+        width = tabs_scrollbar.winfo_width()
+        if height <= 1 or width <= 1:
             return
+
         first = float(first)
         last = float(last)
         if first <= 0.0 and last >= 1.0:
+            _scrollbar_thumb.update(top=0, bottom=height)
             return
+
         thumb_top = int(first * height)
-        thumb_bottom = max(thumb_top + 14, int(last * height))
+        thumb_bottom = max(thumb_top + 18, int(last * height))
         thumb_bottom = min(height, thumb_bottom)
+        _scrollbar_thumb.update(top=thumb_top, bottom=thumb_bottom)
+
+        line_left = max(0, (width - 2) // 2)
         tabs_scrollbar.create_rectangle(
-            0, thumb_top, 2, thumb_bottom,
+            line_left, thumb_top, line_left + 2, thumb_bottom,
             fill="#000000", outline="#000000", tags="thumb"
         )
     except (tk.TclError, ValueError):
         pass
 
-def scroll_tabs_to_pointer(event):
+def scroll_tabs_to_pointer(event, grab_offset=None):
     height = max(1, tabs_scrollbar.winfo_height())
-    tabs_canvas.yview_moveto(max(0.0, min(1.0, event.y / height)))
+    thumb_height = max(18, _scrollbar_thumb["bottom"] - _scrollbar_thumb["top"])
+    max_top = max(0.0, 1.0 - (thumb_height / height))
+    if grab_offset is None:
+        grab_offset = thumb_height / 2
+    desired_top = (event.y - grab_offset) / height
+    tabs_canvas.yview_moveto(max(0.0, min(max_top, desired_top)))
+
+def start_tabs_scrollbar_drag(event):
+    top = _scrollbar_thumb["top"]
+    bottom = _scrollbar_thumb["bottom"]
+    if top <= event.y <= bottom:
+        _scrollbar_drag["grab_offset"] = event.y - top
+    else:
+        # Clicking the track pages the thumb towards the clicked position.
+        _scrollbar_drag["grab_offset"] = max(0, (bottom - top) / 2)
+    _scrollbar_drag["active"] = True
+    scroll_tabs_to_pointer(event, _scrollbar_drag["grab_offset"])
 
 def drag_tabs_scrollbar(event):
     if _scrollbar_drag.get("active"):
-        scroll_tabs_to_pointer(event)
+        scroll_tabs_to_pointer(event, _scrollbar_drag["grab_offset"])
 
-tabs_scrollbar.bind("<Button-1>", lambda event: (_scrollbar_drag.__setitem__("active", True), scroll_tabs_to_pointer(event)))
+def stop_tabs_scrollbar_drag(event=None):
+    _scrollbar_drag["active"] = False
+
+def scroll_tabs_with_wheel(event):
+    # The handler is global so it also works when the pointer is over a tab
+    # button embedded inside the canvas; ignore the wheel everywhere else.
+    try:
+        px, py = event.x_root, event.y_root
+        left = tabs_panel.winfo_rootx()
+        top = tabs_panel.winfo_rooty()
+        if not (left <= px < left + tabs_panel.winfo_width()
+                and top <= py < top + tabs_panel.winfo_height()):
+            return
+
+        if getattr(event, "num", None) == 4:
+            units = -3
+        elif getattr(event, "num", None) == 5:
+            units = 3
+        else:
+            delta = getattr(event, "delta", 0)
+            if not delta:
+                return
+            units = -int(delta / 120) * 3
+            if units == 0:
+                units = -1 if delta > 0 else 1
+        tabs_canvas.yview_scroll(units, "units")
+        return "break"
+    except tk.TclError:
+        pass
+
+tabs_scrollbar.bind("<Button-1>", start_tabs_scrollbar_drag)
 tabs_scrollbar.bind("<B1-Motion>", drag_tabs_scrollbar)
-tabs_scrollbar.bind("<ButtonRelease-1>", lambda event: _scrollbar_drag.__setitem__("active", False))
+tabs_scrollbar.bind("<ButtonRelease-1>", stop_tabs_scrollbar_drag)
 tabs_canvas.configure(yscrollcommand=update_tabs_scrollbar)
 tabs_list.bind(
     "<Configure>",
@@ -641,7 +696,9 @@ tabs_canvas.bind(
     lambda event: tabs_canvas.itemconfigure(tabs_window, width=event.width),
 )
 tabs_scrollbar.bind("<Configure>", lambda event: tabs_canvas.yview())
-
+root.bind_all("<MouseWheel>", scroll_tabs_with_wheel, add="+")
+root.bind_all("<Button-4>", scroll_tabs_with_wheel, add="+")
+root.bind_all("<Button-5>", scroll_tabs_with_wheel, add="+")
 new_tab_button = tk.Button(
     tabs_panel,
     text="+ New",
@@ -701,59 +758,90 @@ def sync_active_conversation():
         item["text"] = editor.get("1.0", "end-1c")
 
 
+# Keep tab widgets alive between selections. Destroying and recreating every
+# button on each click can expose a brief white native-window redraw on Windows.
+conversation_tab_widgets = {}
+
+
 def refresh_conversation_tabs():
     global _last_tab_title
 
-    for child in tabs_list.winfo_children():
-        child.destroy()
-
     active_item = active_conversation()
     _last_tab_title = conversation_display_title(active_item) if active_item else None
+    current_ids = {item["id"] for item in conversations}
 
+    # Remove only tabs that were actually deleted.
+    for conversation_id in list(conversation_tab_widgets):
+        if conversation_id not in current_ids:
+            widgets = conversation_tab_widgets.pop(conversation_id)
+            widgets["row"].destroy()
+
+    # Create missing tabs once, then only update their appearance and text.
     for item in conversations:
-        selected = item["id"] == active_conversation_id
-        tab_row = tk.Frame(tabs_list, bg="#3c4043" if selected else PANEL)
-        tab_row.pack(fill="x", pady=2)
+        conversation_id = item["id"]
+        widgets = conversation_tab_widgets.get(conversation_id)
 
-        tab_button = tk.Button(
-            tab_row,
+        if widgets is None:
+            tab_row = tk.Frame(tabs_list, bg=PANEL)
+            tab_row.pack(fill="x", pady=2)
+
+            tab_button = tk.Button(
+                tab_row,
+                command=lambda cid=conversation_id: switch_conversation(cid),
+                activebackground="#4a4d50",
+                activeforeground="white",
+                relief="flat",
+                bd=0,
+                highlightthickness=0,
+                takefocus=0,
+                default="normal",
+                anchor="w",
+                justify="left",
+                cursor="hand2",
+                padx=5,
+                pady=6,
+            )
+            tab_button.pack(side="left", fill="x", expand=True)
+            tab_button.bind(
+                "<Double-Button-1>",
+                lambda event, cid=conversation_id: rename_conversation(cid),
+            )
+
+            close_button = tk.Button(
+                tab_row,
+                text="×",
+                command=lambda cid=conversation_id: remove_conversation(cid),
+                fg="#ff5c5c",
+                activebackground="#5a3030",
+                activeforeground="#ff7777",
+                relief="flat",
+                bd=0,
+                highlightthickness=0,
+                takefocus=0,
+                default="normal",
+                cursor="hand2",
+                font=("Segoe UI", 11, "bold"),
+                padx=5,
+                pady=1,
+            )
+            close_button.pack(side="right")
+            widgets = {
+                "row": tab_row,
+                "button": tab_button,
+                "close": close_button,
+            }
+            conversation_tab_widgets[conversation_id] = widgets
+
+        selected = conversation_id == active_conversation_id
+        background = "#3c4043" if selected else PANEL
+        widgets["row"].configure(bg=background)
+        widgets["button"].configure(
             text=conversation_display_title(item),
-            command=lambda conversation_id=item["id"]: switch_conversation(conversation_id),
-            bg="#3c4043" if selected else PANEL,
+            bg=background,
             fg="#ffffff" if selected else TEXT,
-            activebackground="#4a4d50",
-            activeforeground="white",
-            relief="flat",
-            bd=0,
-            anchor="w",
-            justify="left",
-            cursor="hand2",
             font=("Segoe UI", 8, "bold" if selected else "normal"),
-            padx=5,
-            pady=6,
         )
-        tab_button.pack(side="left", fill="x", expand=True)
-        tab_button.bind(
-            "<Double-Button-1>",
-            lambda event, conversation_id=item["id"]: rename_conversation(conversation_id),
-        )
-
-        close_button = tk.Button(
-            tab_row,
-            text="×",
-            command=lambda conversation_id=item["id"]: remove_conversation(conversation_id),
-            bg="#3c4043" if selected else PANEL,
-            fg="#ff5c5c",
-            activebackground="#5a3030",
-            activeforeground="#ff7777",
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            font=("Segoe UI", 11, "bold"),
-            padx=5,
-            pady=1,
-        )
-        close_button.pack(side="right")
+        widgets["close"].configure(bg=background)
 
 
 def switch_conversation(conversation_id):
@@ -823,6 +911,124 @@ def rename_conversation(conversation_id):
     save_data()
 
 
+def ask_remove_confirmation(conversation_title):
+    """Show a custom dark confirmation dialog instead of Windows' grey message box."""
+    dialog = tk.Toplevel(root)
+    dialog.title("Remove conversation")
+    dialog.configure(bg=BG)
+    dialog.resizable(False, False)
+    dialog.transient(root)
+
+    result = {"confirmed": False}
+
+    outer = tk.Frame(dialog, bg=BG, padx=22, pady=18)
+    outer.pack(fill="both", expand=True)
+
+    tk.Label(
+        outer,
+        text="Remove this conversation?",
+        bg=BG,
+        fg=TEXT,
+        font=("Segoe UI", 11, "bold"),
+        anchor="w",
+    ).pack(fill="x", pady=(0, 9))
+
+    tk.Label(
+        outer,
+        text=f'Are you sure you want to remove "{conversation_title}" and all its saved text?',
+        bg=BG,
+        fg=TEXT,
+        font=("Segoe UI", 9),
+        justify="left",
+        wraplength=340,
+        anchor="w",
+    ).pack(fill="x", pady=(0, 18))
+
+    button_row = tk.Frame(outer, bg=BG)
+    button_row.pack(fill="x")
+
+    def close_dialog(confirmed=False):
+        result["confirmed"] = confirmed
+        try:
+            dialog.grab_release()
+        except tk.TclError:
+            pass
+        dialog.destroy()
+
+    tk.Button(
+        button_row,
+        text="Cancel",
+        command=lambda: close_dialog(False),
+        bg=PANEL,
+        fg=TEXT,
+        activebackground=BORDER,
+        activeforeground=TEXT,
+        relief="flat",
+        bd=0,
+        padx=16,
+        pady=7,
+        cursor="hand2",
+        takefocus=False,
+    ).pack(side="right", padx=(8, 0))
+
+    tk.Button(
+        button_row,
+        text="Remove",
+        command=lambda: close_dialog(True),
+        bg="#8b2525",
+        fg="#ffffff",
+        activebackground="#a83232",
+        activeforeground="#ffffff",
+        relief="flat",
+        bd=0,
+        padx=16,
+        pady=7,
+        cursor="hand2",
+        takefocus=False,
+    ).pack(side="right")
+
+    dialog.bind("<Escape>", lambda event: close_dialog(False))
+    dialog.protocol("WM_DELETE_WINDOW", lambda: close_dialog(False))
+    dialog.update_idletasks()
+
+    # Centre the dialog over the main window.
+    width = dialog.winfo_reqwidth()
+    height = dialog.winfo_reqheight()
+    x = root.winfo_rootx() + max(0, (root.winfo_width() - width) // 2)
+    y = root.winfo_rooty() + max(0, (root.winfo_height() - height) // 2)
+    dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+    # Match the black Windows title bar used by the main app.
+    try:
+        hwnd = dialog.winfo_id()
+        dwmapi = ctypes.windll.dwmapi
+        dwmapi.DwmSetWindowAttribute.argtypes = (
+            ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint
+        )
+        dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
+        dark_mode = ctypes.c_int(1)
+        black = ctypes.c_uint(0x00000000)
+        white = ctypes.c_uint(0x00FFFFFF)
+        for attribute in (20, 19):
+            if dwmapi.DwmSetWindowAttribute(
+                ctypes.c_void_p(hwnd), attribute,
+                ctypes.byref(dark_mode), ctypes.sizeof(dark_mode)
+            ) == 0:
+                break
+        for attribute, colour in ((35, black), (36, white), (34, black)):
+            dwmapi.DwmSetWindowAttribute(
+                ctypes.c_void_p(hwnd), attribute,
+                ctypes.byref(colour), ctypes.sizeof(colour)
+            )
+    except (AttributeError, OSError, tk.TclError, TypeError):
+        pass
+
+    dialog.grab_set()
+    dialog.focus_force()
+    dialog.wait_window()
+    return result["confirmed"]
+
+
 def remove_conversation(conversation_id):
     global active_conversation_id, _last_editor_text
 
@@ -834,11 +1040,7 @@ def remove_conversation(conversation_id):
         return
 
     if item.get("text", "").strip():
-        confirmed = messagebox.askyesno(
-            "Remove conversation",
-            f'Remove "{conversation_display_title(item)}" and all its saved text?',
-            parent=root,
-        )
+        confirmed = ask_remove_confirmation(conversation_display_title(item))
         if not confirmed:
             return
 
