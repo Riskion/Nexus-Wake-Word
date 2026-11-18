@@ -109,7 +109,21 @@ top_var = tk.BooleanVar(value=bool(data.get("always_on_top", True)))
 root.attributes("-topmost", top_var.get())
 
 status_var = tk.StringVar(value="Auto-saves as you type")
+SUPPORTED_SPEECH_LANGUAGES = {
+    "en": ("EN", "English"),
+    "nl": ("NL", "Dutch"),
+    "de": ("DE", "German"),
+    "es": ("ES", "Spanish"),
+    "fr": ("FR", "French"),
+    "zh": ("ZH", "Chinese (Mandarin)"),
+}
 
+saved_language = data.get("speech_language", "en")
+
+if saved_language not in SUPPORTED_SPEECH_LANGUAGES:
+    saved_language = "en"
+
+speech_language_var = tk.StringVar(value=saved_language)
 
 def show_note_without_taskbar():
     """Try to keep the main note off the Windows taskbar."""
@@ -231,6 +245,7 @@ def save_data():
         data["conversations"] = conversations
         data["active_conversation_id"] = active_conversation_id
         data["sound_muted"] = sound_muted
+        data["speech_language"] = speech_language_var.get()
 
         if wolf is not None:
             try:
@@ -432,7 +447,7 @@ def start_dictation():
     editor.mark_set("insert", "end-1c")
     editor.see("insert")
 
-    started = speech_engine.start()
+    started = speech_engine.start(language=speech_language_var.get())
     if started:
         set_speech_button(True, loading=True)
         status_var.set("Loading speech model… first start can take a little while")
@@ -495,6 +510,53 @@ speak_button = tk.Button(
     pady=1,
 )
 speak_button.pack(side="left", padx=(2, 0))
+def choose_speech_language():
+    save_data()
+    update_language_button()
+
+
+def update_language_button():
+    code = speech_language_var.get()
+    short_name = SUPPORTED_SPEECH_LANGUAGES[code][0]
+    language_button.config(text=f"{short_name} ▼")
+
+
+language_button = tk.Menubutton(
+    header,
+    text="EN ▼",
+    bg="#252525",
+    fg="white",
+    activebackground="#3a3a3a",
+    activeforeground="white",
+    relief="flat",
+    bd=0,
+    font=("Segoe UI", 8),
+    cursor="hand2",
+    padx=5,
+    pady=1,
+)
+
+language_menu = tk.Menu(
+    language_button,
+    tearoff=0,
+    bg="#252525",
+    fg="white",
+    activebackground="#466080",
+    activeforeground="white",
+)
+
+for code, (short_name, language_name) in SUPPORTED_SPEECH_LANGUAGES.items():
+    language_menu.add_radiobutton(
+        label=language_name,
+        variable=speech_language_var,
+        value=code,
+        command=choose_speech_language,
+    )
+
+language_button.config(menu=language_menu)
+language_button.pack(side="left", padx=(2, 0))
+
+update_language_button()
 
 
 # ============================================================
@@ -1322,12 +1384,13 @@ fold_button.pack(side="left")
 
 # Set the header controls in the exact requested left-to-right order.
 # Repacking them here avoids their earlier creation order affecting layout.
-for header_control in (fold_button, sound_button, speak_button, pin_button):
+for header_control in (fold_button, sound_button, speak_button, language_button, pin_button):
     header_control.pack_forget()
 
 fold_button.pack(side="left", padx=(0, 2))
 sound_button.pack(side="left", padx=(2, 0))
 speak_button.pack(side="left", padx=(2, 0))
+language_button.pack(side="left", padx=(2, 0))
 pin_button.pack(side="left", padx=(4, 0))
 
 
