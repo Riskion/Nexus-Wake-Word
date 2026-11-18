@@ -34,6 +34,7 @@ class SpeechEngine:
         self._model = None
         self._device_label = None
         self._model_error = None
+        self.language = "en"
 
     def preload(self) -> bool:
         """Start loading Whisper in the background, only once."""
@@ -103,8 +104,12 @@ class SpeechEngine:
         finally:
             self._model_ready.set()
 
-    def start(self) -> bool:
+    def start(self, language: str = "en") -> bool:
         """Start microphone transcription using the preloaded model."""
+        if language not in {"en", "nl", "de", "fr", "es", "zh"}:
+            language = "en"
+        self.language = language
+
         # Also supports starting speech if preload was not called earlier.
         self.preload()
 
@@ -126,7 +131,7 @@ class SpeechEngine:
                 daemon=True,
             )
             self._thread.start()
-            return True
+            return True    
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -159,6 +164,7 @@ class SpeechEngine:
 
             model = self._model
             device_label = self._device_label
+            selected_language = self.language
 
             if model is None:
                 raise RuntimeError("Whisper model was not loaded.")
@@ -198,7 +204,7 @@ class SpeechEngine:
             self._send(
                 "status",
                 f"Listening on {device_label}; "
-                "detecting language automatically…"
+                f"using {selected_language.upper()}…"
             )
 
             chunk_samples = int(
@@ -230,7 +236,7 @@ class SpeechEngine:
                 try:
                     segments, info = model.transcribe(
                         chunk,
-                        language=None,
+                        language=selected_language,
                         task="transcribe",
                         beam_size=1,
                         best_of=1,
@@ -247,9 +253,7 @@ class SpeechEngine:
                         for segment in segments
                     ).strip()
 
-                    language = (
-                        getattr(info, "language", None) or "unknown"
-                    )
+                    language = selected_language
 
                     if recognised:
                         self._send("text", recognised, language)
@@ -257,7 +261,7 @@ class SpeechEngine:
                         self._send(
                             "status",
                             f"Listening on {device_label}; "
-                            "language detection is automatic…"
+                            f"using {selected_language.upper()}…"
                         )
 
                 except Exception as error:
