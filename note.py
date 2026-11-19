@@ -1490,6 +1490,43 @@ def start_compact_silently():
     finally:
         root._starting_compact = False
 
+    def hide_initial_wolf_from_taskbar():
+        try:
+            if wolf is None or not wolf.winfo_exists():
+                return
+
+            wolf.update_idletasks()
+
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetParent(wolf.winfo_id())
+
+            if not hwnd:
+                hwnd = wolf.winfo_id()
+
+            GWL_EXSTYLE = -20
+            WS_EX_TOOLWINDOW = 0x00000080
+            WS_EX_APPWINDOW = 0x00040000
+
+            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+
+            user32.SetWindowLongW(
+                hwnd,
+                GWL_EXSTYLE,
+                (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW,
+            )
+
+            user32.SetWindowPos(
+                hwnd,
+                0,
+                0, 0, 0, 0,
+                0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020,
+            )
+
+        except (AttributeError, OSError, tk.TclError):
+            pass
+
+    root.after(300, hide_initial_wolf_from_taskbar)
+
 
 def close_app():
     save_data()
