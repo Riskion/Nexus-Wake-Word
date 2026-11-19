@@ -104,10 +104,10 @@ class SpeechEngine:
         finally:
             self._model_ready.set()
 
-    def start(self, language: str = "en") -> bool:
+    def start(self, language: str = "auto") -> bool:
         """Start microphone transcription using the preloaded model."""
-        if language not in {"en", "nl", "de", "fr", "es", "zh"}:
-            language = "en"
+        if language not in {"auto", "en", "nl", "de", "fr", "es", "zh"}:
+            language = "auto"
         self.language = language
 
         # Also supports starting speech if preload was not called earlier.
@@ -124,6 +124,14 @@ class SpeechEngine:
                     self._audio_queue.get_nowait()
                 except queue.Empty:
                     break
+
+            self._thread = threading.Thread(
+                target=self._run,
+                name="QuickNoteSpeech",
+                daemon=True,
+            )
+            self._thread.start()
+            return True
 
             self._thread = threading.Thread(
                 target=self._run,
@@ -233,10 +241,11 @@ class SpeechEngine:
                 audio_parts = [remainder] if len(remainder) else []
                 buffered_samples = len(remainder)
 
+                selected_language = self.language
+
                 try:
-                    segments, info = model.transcribe(
-                        chunk,
-                        language=selected_language,
+                    segments, info = model.transcribe(                        chunk,
+                        language=None if selected_language == "auto" else selected_language,
                         task="transcribe",
                         beam_size=1,
                         best_of=1,
@@ -253,7 +262,11 @@ class SpeechEngine:
                         for segment in segments
                     ).strip()
 
-                    language = selected_language
+                    language = (
+                        info.language
+                        if selected_language == "auto"
+                        else selected_language
+                    )
 
                     if recognised:
                         self._send("text", recognised, language)
