@@ -110,18 +110,19 @@ root.attributes("-topmost", top_var.get())
 
 status_var = tk.StringVar(value="Auto-saves as you type")
 SUPPORTED_SPEECH_LANGUAGES = {
-    "en": ("EN", "English"),
+    "auto": ("AUTO", "Automatic"),
     "nl": ("NL", "Dutch"),
+    "en": ("EN", "English"),
     "de": ("DE", "German"),
     "es": ("ES", "Spanish"),
     "fr": ("FR", "French"),
     "zh": ("ZH", "Chinese (Mandarin)"),
 }
 
-saved_language = data.get("speech_language", "en")
+saved_language = data.get("speech_language", "auto")
 
 if saved_language not in SUPPORTED_SPEECH_LANGUAGES:
-    saved_language = "en"
+    saved_language = "auto"
 
 speech_language_var = tk.StringVar(value=saved_language)
 
@@ -381,23 +382,8 @@ pin_button.pack(side="left", padx=(4, 0))
 
 
 def maintain_topmost():
-    """Keep the native Windows Z-order flag aligned with the checkbox."""
-    try:
-        if not root.winfo_exists():
-            return
-
-        enabled = bool(top_var.get())
-        root.attributes("-topmost", enabled)
-        apply_native_topmost(root, enabled)
-
-        if wolf is not None and wolf.winfo_exists():
-            wolf.attributes("-topmost", enabled)
-            apply_native_topmost(wolf, enabled)
-
-        root.after(2000, maintain_topmost)
-    except tk.TclError:
-        pass
-
+    pass
+       
 
 # ============================================================
 # LOCAL SPEECH-TO-TEXT (NO WINDOWS VOICE TYPING)
@@ -511,6 +497,7 @@ speak_button = tk.Button(
 )
 speak_button.pack(side="left", padx=(2, 0))
 def choose_speech_language():
+    speech_engine.language = speech_language_var.get()
     save_data()
     update_language_button()
 
