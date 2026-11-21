@@ -21,8 +21,8 @@ except ImportError:
 APP_DIR = Path(__file__).resolve().parent
 DATA_FILE = APP_DIR / "note_data.json"
 WOLF_FILE = APP_DIR / "wolf.png"
-OPEN_SOUND = APP_DIR / "Cara-Delevingne-Voice-open.mp3"
-CLOSE_SOUND = APP_DIR / "Cara-Delevingne-Voice-closed.mp3"
+OPEN_SOUND = APP_DIR / "Cara-Delevingne-Voice-open-louder.mp3"
+CLOSE_SOUND = APP_DIR / "Cara-Delevingne-Voice-closed-louder.mp3"
 
 NOTE_W, NOTE_H = 440, 460
 ICON_SIZE = 96
@@ -213,6 +213,7 @@ def play_sound(sound_file):
             pygame.mixer.init()
 
         pygame.mixer.music.load(str(sound_file))
+        pygame.mixer.music.set_volume(1.0)
         pygame.mixer.music.play()
 
     except Exception as error:
