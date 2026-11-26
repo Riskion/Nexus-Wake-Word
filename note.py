@@ -76,6 +76,7 @@ for item in conversations:
             "title": str(item.get("title") or "New conversation"),
             "custom_title": bool(item.get("custom_title", False)),
             "text": str(item.get("text", "")),
+            "tab_color": item.get("tab_color"),
         })
 conversations = clean_conversations
 
@@ -814,25 +815,28 @@ conversation_tab_widgets = {}
 
 
 
+
 # Drag-and-drop state for conversation tabs.
 _tab_drag = {
     "conversation_id": None,
     "start_y": 0,
     "moved": False,
     "preview": None,
+    "placeholder": None,
 }
 
 
 def clear_conversation_tab_drag_preview():
-    preview = _tab_drag.get("preview")
+    for key in ("preview", "placeholder"):
+        widget = _tab_drag.get(key)
 
-    if preview is not None:
-        try:
-            preview.destroy()
-        except tk.TclError:
-            pass
+        if widget is not None:
+            try:
+                widget.destroy()
+            except tk.TclError:
+                pass
 
-    _tab_drag["preview"] = None
+        _tab_drag[key] = None
 
 
 def start_conversation_tab_drag(event, conversation_id):
@@ -852,6 +856,42 @@ def move_conversation_tab_drag(event, conversation_id):
 
     _tab_drag["moved"] = True
 
+    # Create a placeholder where the original tab was.
+    if _tab_drag["placeholder"] is None:
+        dragged_row = conversation_tab_widgets[conversation_id]["row"]
+
+        tabs_list.update_idletasks()
+
+        row_height = max(dragged_row.winfo_height(), 1)
+        siblings = tabs_list.pack_slaves()
+        row_index = siblings.index(dragged_row)
+
+        next_widget = (
+            siblings[row_index + 1]
+            if row_index + 1 < len(siblings)
+            else None
+        )
+
+        dragged_row.pack_forget()
+
+        placeholder = tk.Frame(
+            tabs_list,
+            height=row_height,
+            bg="#34383b",
+            relief="ridge",
+            bd=1,
+        )
+        placeholder.pack_propagate(False)
+
+        if next_widget is not None:
+            placeholder.pack(fill="x", pady=2, before=next_widget)
+        else:
+            placeholder.pack(fill="x", pady=2)
+
+        _tab_drag["placeholder"] = placeholder
+        tabs_list.update_idletasks()
+
+    # Create the floating conversation-name preview.
     if _tab_drag["preview"] is None:
         item = next(
             (entry for entry in conversations if entry["id"] == conversation_id),
@@ -881,8 +921,48 @@ def move_conversation_tab_drag(event, conversation_id):
 
         _tab_drag["preview"] = preview
 
+    # Keep the preview centered above the mouse cursor.
     preview = _tab_drag["preview"]
-    preview.geometry(f"+{event.x_root + 14}+{event.y_root + 12}")
+    preview.update_idletasks()
+
+    preview_x = event.x_root - preview.winfo_width() // 2
+    preview_y = event.y_root - preview.winfo_height() - 12
+
+    preview.geometry(f"+{preview_x}+{preview_y}")
+
+    # Move the placeholder between the remaining conversation tabs.
+    remaining_items = [
+        item for item in conversations
+        if item["id"] != conversation_id
+    ]
+
+    placeholder = _tab_drag["placeholder"]
+
+    tabs_list.update_idletasks()
+
+    insert_index = len(remaining_items)
+
+    for index, item in enumerate(remaining_items):
+        row = conversation_tab_widgets[item["id"]]["row"]
+        row_middle = row.winfo_rooty() + row.winfo_height() / 2
+
+        if event.y_root < row_middle:
+            insert_index = index
+            placeholder.pack_configure(before=row)
+            break
+
+    else:
+        if remaining_items:
+            last_row = conversation_tab_widgets[
+                remaining_items[-1]["id"]
+            ]["row"]
+
+            placeholder.pack_configure(after=last_row)
+
+    tabs_list.update_idletasks()
+
+
+    
 
 
 def finish_conversation_tab_drag(event, conversation_id):
@@ -934,6 +1014,61 @@ def finish_conversation_tab_drag(event, conversation_id):
 
 
 
+# Available conversation tab colours.
+TAB_COLORS = {
+    "Red": "#B83232",
+    "Orange": "#C45D16",
+    "Yellow": "#9A8310",
+    "Green": "#25834A",
+    "Blue": "#2469B5",
+    "Purple": "#7542B8",
+    "Pink": "#B83F78",
+}
+
+
+def set_conversation_tab_color(conversation_id, color):
+    item = next(
+        (entry for entry in conversations if entry["id"] == conversation_id),
+        None,
+    )
+
+    if item is None:
+        return
+
+    if color is None:
+        item.pop("tab_color", None)
+    else:
+        item["tab_color"] = color
+
+    refresh_conversation_tabs()
+    save_data()
+
+
+def show_conversation_tab_color_menu(event, conversation_id):
+    menu = tk.Menu(root, tearoff=0)
+
+    menu.add_command(
+        label="No colour",
+        command=lambda: set_conversation_tab_color(conversation_id, None),
+    )
+
+    menu.add_separator()
+
+    for name, color in TAB_COLORS.items():
+        menu.add_command(
+            label=name,
+            command=lambda c=color: set_conversation_tab_color(
+                conversation_id, c
+            ),
+        )
+
+    try:
+        menu.tk_popup(event.x_root, event.y_root)
+    finally:
+        menu.grab_release()
+
+    return "break"
+
 def refresh_conversation_tabs():
     global _last_tab_title
 
@@ -979,6 +1114,12 @@ def refresh_conversation_tabs():
                 lambda event, cid=conversation_id: rename_conversation(cid),
             )
             tab_button.bind(
+                "<Button-3>",
+                lambda event, cid=conversation_id: show_conversation_tab_color_menu(
+                    event, cid
+                ),
+            )
+            tab_button.bind(
                 "<Button-1>",
                 lambda event, cid=conversation_id: start_conversation_tab_drag(event, cid),
                 add="+",
@@ -1020,16 +1161,28 @@ def refresh_conversation_tabs():
             }
             conversation_tab_widgets[conversation_id] = widgets
 
+        
         selected = conversation_id == active_conversation_id
-        background = "#3c4043" if selected else PANEL
+        tab_color = item.get("tab_color")
+
+
+        if tab_color:
+            background = tab_color
+        else:
+            background = "#3c4043" if selected else PANEL
+
         widgets["row"].configure(bg=background)
         widgets["button"].configure(
             text=conversation_display_title(item),
             bg=background,
-            fg="#ffffff" if selected else TEXT,
+            fg="#ffffff" if selected or tab_color else TEXT,
+            activebackground=background,
+            activeforeground="#ffffff",
             font=("Segoe UI", 8, "bold" if selected else "normal"),
         )
         widgets["close"].configure(bg=background)
+
+
 
     # Reorder the existing tab rows to match the conversations list.
     for item in conversations:
@@ -1125,7 +1278,7 @@ def ask_remove_confirmation(conversation_title):
         text="Remove this conversation?",
         bg=BG,
         fg=TEXT,
-        font=("Segoe UI", 11, "bold"),
+        font=("Segoe UI", 11),
         anchor="w",
     ).pack(fill="x", pady=(0, 9))
 
