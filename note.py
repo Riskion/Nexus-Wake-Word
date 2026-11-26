@@ -813,6 +813,7 @@ def sync_active_conversation():
 conversation_tab_widgets = {}
 
 
+
 def refresh_conversation_tabs():
     global _last_tab_title
 
@@ -826,7 +827,7 @@ def refresh_conversation_tabs():
             widgets = conversation_tab_widgets.pop(conversation_id)
             widgets["row"].destroy()
 
-    # Create missing tabs once, then only update their appearance and text.
+    # Create missing tabs once, then update their appearance and text.
     for item in conversations:
         conversation_id = item["id"]
         widgets = conversation_tab_widgets.get(conversation_id)
@@ -893,6 +894,14 @@ def refresh_conversation_tabs():
         )
         widgets["close"].configure(bg=background)
 
+    # Reorder the existing tab rows to match the conversations list.
+    for item in conversations:
+        conversation_tab_widgets[item["id"]]["row"].pack_forget()
+
+    for item in conversations:
+        conversation_tab_widgets[item["id"]]["row"].pack(fill="x", pady=2)
+
+
 
 def switch_conversation(conversation_id):
     global active_conversation_id, _last_editor_text
@@ -925,7 +934,7 @@ def create_conversation():
         "custom_title": False,
         "text": "",
     }
-    conversations.append(item)
+    conversations.insert(0, item)
     active_conversation_id = item["id"]
     editor.delete("1.0", "end")
     editor.edit_modified(False)
