@@ -814,6 +814,126 @@ conversation_tab_widgets = {}
 
 
 
+# Drag-and-drop state for conversation tabs.
+_tab_drag = {
+    "conversation_id": None,
+    "start_y": 0,
+    "moved": False,
+    "preview": None,
+}
+
+
+def clear_conversation_tab_drag_preview():
+    preview = _tab_drag.get("preview")
+
+    if preview is not None:
+        try:
+            preview.destroy()
+        except tk.TclError:
+            pass
+
+    _tab_drag["preview"] = None
+
+
+def start_conversation_tab_drag(event, conversation_id):
+    clear_conversation_tab_drag_preview()
+
+    _tab_drag["conversation_id"] = conversation_id
+    _tab_drag["start_y"] = event.y_root
+    _tab_drag["moved"] = False
+
+
+def move_conversation_tab_drag(event, conversation_id):
+    if _tab_drag["conversation_id"] != conversation_id:
+        return
+
+    if abs(event.y_root - _tab_drag["start_y"]) < 6:
+        return
+
+    _tab_drag["moved"] = True
+
+    if _tab_drag["preview"] is None:
+        item = next(
+            (entry for entry in conversations if entry["id"] == conversation_id),
+            None,
+        )
+
+        if item is None:
+            return
+
+        preview = tk.Toplevel(root)
+        preview.overrideredirect(True)
+        preview.attributes("-topmost", True)
+        preview.configure(bg="#4a4d50")
+
+        label = tk.Label(
+            preview,
+            text=conversation_display_title(item),
+            bg="#4a4d50",
+            fg="#ffffff",
+            font=("Segoe UI", 9, "bold"),
+            padx=12,
+            pady=7,
+            relief="solid",
+            bd=1,
+        )
+        label.pack()
+
+        _tab_drag["preview"] = preview
+
+    preview = _tab_drag["preview"]
+    preview.geometry(f"+{event.x_root + 14}+{event.y_root + 12}")
+
+
+def finish_conversation_tab_drag(event, conversation_id):
+    if _tab_drag["conversation_id"] != conversation_id:
+        return
+
+    if not _tab_drag["moved"]:
+        clear_conversation_tab_drag_preview()
+        _tab_drag["conversation_id"] = None
+        return
+
+    dragged_item = next(
+        (item for item in conversations if item["id"] == conversation_id),
+        None,
+    )
+
+    if dragged_item is None:
+        clear_conversation_tab_drag_preview()
+        _tab_drag["conversation_id"] = None
+        _tab_drag["moved"] = False
+        return "break"
+
+    remaining_items = [
+        item for item in conversations
+        if item["id"] != conversation_id
+    ]
+
+    insert_index = len(remaining_items)
+
+    for index, item in enumerate(remaining_items):
+        row = conversation_tab_widgets[item["id"]]["row"]
+        row_middle = row.winfo_rooty() + row.winfo_height() / 2
+
+        if event.y_root < row_middle:
+            insert_index = index
+            break
+
+    remaining_items.insert(insert_index, dragged_item)
+    conversations[:] = remaining_items
+
+    clear_conversation_tab_drag_preview()
+    _tab_drag["conversation_id"] = None
+    _tab_drag["moved"] = False
+
+    refresh_conversation_tabs()
+    save_data()
+
+    return "break"
+
+
+
 def refresh_conversation_tabs():
     global _last_tab_title
 
@@ -853,10 +973,27 @@ def refresh_conversation_tabs():
                 pady=6,
             )
             tab_button.pack(side="left", fill="x", expand=True)
+            
             tab_button.bind(
                 "<Double-Button-1>",
                 lambda event, cid=conversation_id: rename_conversation(cid),
             )
+            tab_button.bind(
+                "<Button-1>",
+                lambda event, cid=conversation_id: start_conversation_tab_drag(event, cid),
+                add="+",
+            )
+            tab_button.bind(
+                "<B1-Motion>",
+                lambda event, cid=conversation_id: move_conversation_tab_drag(event, cid),
+                add="+",
+            )
+            tab_button.bind(
+                "<ButtonRelease-1>",
+                lambda event, cid=conversation_id: finish_conversation_tab_drag(event, cid),
+                add="+",
+            )
+
 
             close_button = tk.Button(
                 tab_row,
