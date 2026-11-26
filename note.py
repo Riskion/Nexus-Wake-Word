@@ -29,7 +29,7 @@ ICON_SIZE = 96
 
 BG = "#202124"
 PANEL = "#292a2d"
-TEXT = "#e8eaed"
+TEXT = "#FFFFFF"
 MUTED = "#9aa0a6"
 ACCENT = "#8ab4f8"
 BORDER = "#3c4043"
@@ -1107,7 +1107,7 @@ def refresh_conversation_tabs():
                 padx=5,
                 pady=6,
             )
-            tab_button.pack(side="left", fill="x", expand=True)
+
             
             tab_button.bind(
                 "<Double-Button-1>",
@@ -1153,7 +1153,9 @@ def refresh_conversation_tabs():
                 padx=5,
                 pady=1,
             )
-            close_button.pack(side="right")
+            
+            close_button.pack(side="right", padx=(0, 3), ipadx=2)
+            tab_button.pack(side="left", fill="x", expand=True)
             widgets = {
                 "row": tab_row,
                 "button": tab_button,
